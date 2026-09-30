@@ -24,10 +24,11 @@ s3://hermes-files-…/models/laya/<tarefa>/<versão>/   ──►  provedor-ia m
 
 | # | Onde | Comando | Resultado |
 |---|---|---|---|
-| 1 | estação | `laya-pipeline validate` | `task.yaml` conferido |
-| 2 | estação | `laya-pipeline gen-texts --n 3000` *(se não houver textos reais)* | `data/texts.jsonl` |
+| 0 | **humano** | preenche `FORMULARIO.md`, `data/documentos/` e `data/exemplos/<resposta>/` no repositório da tarefa | entrada |
+| 1 | estação | agente escreve `task.yaml` e `prompts/` do formulário → `laya-pipeline validate` | especificação (aprovada pelo humano) |
+| 2 | estação | `laya-pipeline ingest` (+ `gen-texts --n 3000` se faltarem textos) | `data/texts.jsonl`, `data/human.jsonl` |
 | 3 | estação | `laya-pipeline label` | `runs/<v>/labeled.jsonl` (professor LLM, retomável) |
-| 4 | estação | `laya-pipeline split` + `sample` | `train.jsonl`, `eval.jsonl`, `sample.md` |
+| 4 | estação | `laya-pipeline split` + `sample` | `train.jsonl`, `eval.jsonl`, `sample.md` (com a concordância professor x humano) |
 | 5 | **humano** | revisar `sample.md` → `laya-pipeline approve data --by <nome>` | portão 1 |
 | 6 | estação | `laya-pipeline sync push` | dados no S3 |
 | 7 | GPU | `sync pull` → `eval` → `train` → `eval --trained` → `sync push` | checkpoint + `report.md` |
@@ -35,6 +36,10 @@ s3://hermes-files-…/models/laya/<tarefa>/<versão>/   ──►  provedor-ia m
 | 9 | GPU | `laya-pipeline publish` | checkpoint + manifesto no S3, `reports/<v>.md` no repo da tarefa |
 
 `laya-pipeline status` mostra o que já foi feito e qual é o próximo passo.
+
+Os exemplos respondidos por uma pessoa (`data/exemplos/`) vão sempre para a
+avaliação, nunca para o treino. Eles medem o professor antes do treino (na
+`sample.md`) e o modelo depois (no `report.md`, "Contra respostas humanas").
 
 Na GPU (passo 7), use `notebooks/studiolab.ipynb` (SageMaker Studio Lab, T4);
 funciona igual no Kaggle ou em qualquer máquina com CUDA.

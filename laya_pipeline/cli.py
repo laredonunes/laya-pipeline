@@ -2,6 +2,7 @@
 
   laya-pipeline validate                 valida o task.yaml
   laya-pipeline status                   etapas feitas / próxima
+  laya-pipeline ingest                   data/documentos + data/exemplos → data/*.jsonl
   laya-pipeline gen-texts --n 500        textos sintéticos → data/texts.jsonl
   laya-pipeline label                    professor rotula → runs/<v>/labeled.jsonl
   laya-pipeline split                    treino/avaliação estáveis por id
@@ -37,6 +38,7 @@ def main(argv=None):
 
     sub.add_parser("validate")
     sub.add_parser("status")
+    sub.add_parser("ingest")
     p = sub.add_parser("gen-texts")
     p.add_argument("--n", type=int, required=True)
     p.add_argument("--seed", type=int, default=0)
@@ -82,6 +84,9 @@ def main(argv=None):
         for s in steps:
             print("[%s] %s" % ("x" if s["done"] else " ", s["step"]))
         print("próximo: %s" % (nxt or "nada — versão publicada"))
+    elif args.cmd == "ingest":
+        from .ingest import ingest
+        _print(ingest(task))
     elif args.cmd == "gen-texts":
         from .teacher import generate_texts
         print("gerados:", generate_texts(task, args.n, args.seed, (args.min_words, args.max_words)))

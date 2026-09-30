@@ -8,14 +8,18 @@
 - [x] `laya-pipeline` v0.1.0: CLI, módulos, notebook do Studio Lab, testes
 - [x] `laya-template`: `task.yaml` de exemplo, prompts, skill `laya-task`
 - [x] Teste de fumaça do fluxo inteiro em CPU
-- [x] Repositórios no GitHub (privados) — 2026-09-30
+- [x] Repositórios no GitHub — 2026-09-30
+- [x] v0.2.0: entrada pela pessoa (`FORMULARIO.md`, `data/documentos/`,
+      `data/exemplos/<resposta>/`), comando `ingest`, exemplos humanos só na
+      avaliação e concordância professor x humano na amostra e no relatório — 2026-09-30
 
 ## Próximos passos (1º modelo, à mão)
 
-1. [ ] **Definir a 1ª tarefa**: o que o modelo decide e com quais opções.
-2. [ ] **Definir a fonte dos textos**: reais ou sintéticos.
-3. [ ] Criar `laya-<tarefa>` a partir do template e preencher `task.yaml` e prompts.
-4. [ ] Gerar e rotular os dados (5 a 10 mil exemplos cabem numa sessão de T4).
+1. [ ] **Pessoa:** criar `laya-<tarefa>` do template, preencher o `FORMULARIO.md`,
+       colocar os textos e os exemplos respondidos, e mandar o link.
+2. [ ] Agente: `task.yaml` e `prompts/` a partir do formulário → aprovação da especificação.
+3. [ ] `ingest` e teste do professor contra os exemplos humanos (meta ≥ ~85% de concordância).
+4. [ ] Rotular tudo (+ sintéticos, se permitido). 5 a 10 mil exemplos cabem numa sessão de T4.
 5. [ ] Aprovação da amostra.
 6. [ ] Baseline, treino no Studio Lab e avaliação.
 7. [ ] Aprovação do relatório.

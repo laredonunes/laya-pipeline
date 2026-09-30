@@ -51,6 +51,7 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
     metrics = {qid: QuestionMetrics(q["type"], option_keys(q)) for qid, q in task.questions.items()}
     latencies: List[float] = []
     worst: List[Dict[str, Any]] = []
+    vs_human = {"cases": 0, "agree": 0}
 
     agent.system_one(rows[0]["state"], task.questions)  # aquecimento, fora da medição
     for i, row in enumerate(rows, 1):
@@ -61,6 +62,10 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
             pred = to_probabilities(q, out["answers"][qid])
             gold = row["gold"][qid]["probabilities"]
             metrics[qid].add(pred, gold)
+            expected = row.get("human", {}).get(qid)
+            if expected is not None:
+                vs_human["cases"] += 1
+                vs_human["agree"] += int(max(pred, key=pred.get) == expected)
             if max(pred, key=pred.get) != max(gold, key=gold.get):
                 worst.append({"id": row["id"], "question": qid, "gold": gold, "pred": pred,
                               "gap": round(max(gold.values()) - gold.get(max(pred, key=pred.get), 0), 4),
@@ -79,6 +84,8 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
         "latency_s": {"p50": round(percentile(latencies, 50), 3),
                       "p95": round(percentile(latencies, 95), 3)},
         "worst_errors": worst[:15],
+        "vs_human": dict(vs_human, accuracy=round(vs_human["agree"] / vs_human["cases"], 4)
+                         if vs_human["cases"] else None),
     }
     path = os.path.join(task.run_dir, "eval_%s.json" % label)
     with open(path, "w", encoding="utf-8") as f:
@@ -113,6 +120,10 @@ def write_report(task: Task) -> str:
         lines.append("| %s | %d | %s | %s | %s | %.2fs | %.2fs | %s |" % (
             label, r["cases"], ov.get("accuracy"), ov.get("brier"), ov.get("ece"),
             r["latency_s"]["p50"], r["latency_s"]["p95"], r["device"]))
+    if any(r.get("vs_human", {}).get("cases") for r in runs.values()):
+        lines += ["", "Contra respostas humanas (data/exemplos/): " + "; ".join(
+            "%s %s/%s" % (label, r["vs_human"]["agree"], r["vs_human"]["cases"])
+            for label, r in runs.items() if r.get("vs_human", {}).get("cases"))]
     lines += ["", "Latência medida no dispositivo da avaliação; a de produção (CPU serverless) "
               "vem do bench/latency.py.", "", "## Por pergunta", ""]
     for label, r in runs.items():

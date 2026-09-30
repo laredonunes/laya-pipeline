@@ -27,8 +27,9 @@ hermes-usage-proxy. Só são necessárias as variáveis `HERMES_PROXY_URL` e
 
 | # | Onde | Etapa | Saída |
 |---|---|---|---|
-| 1 | estação | `validate` | `task.yaml` conferido |
-| 2 | estação | `gen-texts` *(se não houver textos reais)* | `data/texts.jsonl` |
+| 0 | **pessoa** | preenche `FORMULARIO.md`, `data/documentos/`, `data/exemplos/<resposta>/` e manda o link | entrada |
+| 1 | agente | `task.yaml` e `prompts/` a partir do formulário, `validate` | especificação, aprovada pela pessoa |
+| 2 | estação | `ingest` (+ `gen-texts` se faltarem textos) | `data/texts.jsonl`, `data/human.jsonl` |
 | 3 | estação | `label` | `runs/<v>/labeled.jsonl` (retomável) |
 | 4 | estação | `split` + `sample` | `train.jsonl`, `eval.jsonl`, `sample.md` |
 | 5 | **pessoa** | `approve data` | portão 1 |
@@ -37,14 +38,29 @@ hermes-usage-proxy. Só são necessárias as variáveis `HERMES_PROXY_URL` e
 | 8 | **pessoa** | `approve report` | portão 2 |
 | 9 | GPU | `publish` | checkpoint + manifesto no S3, `reports/<v>.md` no repo da tarefa |
 
+## Entrada da pessoa (repositório da tarefa)
+
+A pessoa não escreve YAML nem JSONL:
+
+- **`FORMULARIO.md`**: a tarefa em perguntas e respostas (o que decide,
+  opções, desempates, origem dos textos, meta). O agente deriva dele o
+  `task.yaml` e os `prompts/`.
+- **`data/documentos/`**: textos sem resposta (`.txt`/`.md`, `.csv` com
+  coluna `texto`, ou `.jsonl`). O professor rotula.
+- **`data/exemplos/<resposta>/`**: textos já respondidos pela pessoa. Ficam
+  fora do treino e medem o professor e o modelo contra uma pessoa.
+
+Arquivos `EXEMPLO-*` (os modelos que vêm no template) são ignorados.
+
 ## Módulos
 
 | Módulo | Função | torch? |
 |---|---|---|
 | `task.py` | lê e valida o `task.yaml`, com defaults | não |
+| `ingest.py` | `data/documentos/` e `data/exemplos/<resposta>/` → `texts.jsonl` e `human.jsonl` | não |
 | `teacher.py` | gera textos e rotula com probabilidades via proxy | não |
 | `proxy.py` | cliente do hermes-usage-proxy (LLM e URLs pré-assinadas do S3) | não |
-| `dataset.py` | divisão treino/avaliação estável por hash do id, amostra | não |
+| `dataset.py` | divisão treino/avaliação estável por hash do id (exemplos humanos sempre na avaliação), amostra, concordância professor x humano | não |
 | `state.py` | etapas concluídas e portões de aprovação | não |
 | `sync.py` | envia e baixa `runs/<v>` pelo S3 | não |
 | `metrics.py` | acurácia, Brier, ECE e metas | não |

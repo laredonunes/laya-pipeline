@@ -55,7 +55,7 @@ def status(task: Task) -> List[Dict[str, Any]]:
     texts = task.path(task.data["texts"])
     appr = approvals(task)
     return [
-        {"step": "texts", "done": os.path.exists(texts) and os.path.getsize(texts) > 0},
+        {"step": "ingest/texts", "done": os.path.exists(texts) and os.path.getsize(texts) > 0},
         {"step": "label", "done": exists("labeled.jsonl")},
         {"step": "split", "done": exists("train.jsonl") and exists("eval.jsonl")},
         {"step": "sample", "done": exists("sample.md")},

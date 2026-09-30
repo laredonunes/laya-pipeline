@@ -124,7 +124,7 @@ def label(task: Task, limit: Optional[int] = None) -> Dict[str, int]:
     já rotulados são pulados, então dá para interromper e continuar."""
     texts = read_jsonl(task.path(task.data["texts"]))
     if not texts:
-        raise SystemExit("nenhum texto em %s (use gen-texts ou adicione os seus)" % task.data["texts"])
+        raise SystemExit("nenhum texto em %s (rode `ingest` depois de colocar arquivos em data/documentos, ou use gen-texts)" % task.data["texts"])
     os.makedirs(task.run_dir, exist_ok=True)
     out_path = os.path.join(task.run_dir, "labeled.jsonl")
     fail_path = os.path.join(task.run_dir, "label_failures.jsonl")

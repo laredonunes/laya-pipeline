@@ -7,6 +7,7 @@ import random
 from collections import Counter
 from typing import Any, Dict, List, Tuple
 
+from .ingest import load_human
 from .task import Task, option_keys
 from .teacher import read_jsonl
 
@@ -23,8 +24,15 @@ def split(task: Task) -> Tuple[int, int]:
     if not rows:
         raise SystemExit("nada rotulado ainda: rode `label` primeiro")
     frac = float(task.data["eval_fraction"])
-    train = [r for r in rows if _bucket(r["id"]) >= frac]
-    evaluation = [r for r in rows if _bucket(r["id"]) < frac]
+    human = load_human(task)
+    for row in rows:
+        if row["id"] in human:
+            row["human"] = human[row["id"]]
+    # Exemplos respondidos por uma pessoa vão sempre para a avaliação: são a
+    # única medida contra uma pessoa (e não contra o professor).
+    is_eval = lambda r: "human" in r or _bucket(r["id"]) < frac  # noqa: E731
+    train = [r for r in rows if not is_eval(r)]
+    evaluation = [r for r in rows if is_eval(r)]
     for name, part in (("train.jsonl", train), ("eval.jsonl", evaluation)):
         with open(os.path.join(task.run_dir, name), "w", encoding="utf-8") as f:
             for row in part:
@@ -56,6 +64,31 @@ def stats(task: Task, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
     return out
 
 
+def teacher_vs_human(task: Task, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Concordância do professor com as respostas humanas de data/exemplos/.
+    Se o professor discorda da pessoa, o modelo vai aprender a discordar
+    também: o conserto é o prompt do professor ou as opções, não o treino."""
+    human = load_human(task)
+    out: Dict[str, Any] = {"cases": 0, "agree": 0, "disagreements": []}
+    for row in rows:
+        answers = human.get(row["id"])
+        if not answers:
+            continue
+        for qid, expected in answers.items():
+            if qid not in row["gold"]:
+                continue
+            got = winner(row["gold"][qid]["probabilities"])
+            out["cases"] += 1
+            if got == expected:
+                out["agree"] += 1
+            else:
+                out["disagreements"].append({"id": row["id"], "question": qid, "human": expected,
+                                             "teacher": got, "probabilities": row["gold"][qid]["probabilities"],
+                                             "excerpt": row["state"][:400]})
+    out["agreement"] = round(out["agree"] / out["cases"], 4) if out["cases"] else None
+    return out
+
+
 def sample(task: Task, n: int = 20, seed: int = 0) -> str:
     """Gera runs/<versão>/sample.md: n casos com o texto e o que o professor
     respondeu, para a revisão humana antes do treino."""
@@ -71,6 +104,19 @@ def sample(task: Task, n: int = 20, seed: int = 0) -> str:
         lines.append("- **%s**: %s (confiança média do professor: %s)" % (
             qid, ", ".join("%s=%d" % kv for kv in info["distribution"].items()),
             info["teacher_mean_top_prob"]))
+    agreement = teacher_vs_human(task, rows)
+    if agreement["cases"]:
+        lines += ["", "## Professor x respostas humanas (data/exemplos/)", "",
+                  "Concordância: **%d de %d (%.0f%%)**. Abaixo de ~85%%, ajuste o "
+                  "`prompts/teacher.md` ou as opções antes de treinar." % (
+                      agreement["agree"], agreement["cases"], 100 * agreement["agreement"]), ""]
+        for d in agreement["disagreements"]:
+            lines.append("- `%s` humano=`%s` professor=`%s` %s — %s…" % (
+                d["id"], d["human"], d["teacher"], json.dumps(d["probabilities"], ensure_ascii=False),
+                d["excerpt"][:200].replace("\n", " ")))
+    else:
+        lines += ["", "_Sem exemplos respondidos em data/exemplos/: não dá para medir o professor "
+                  "contra uma pessoa. Recomendado ter ao menos ~10 por opção._"]
     lines += ["", "## Casos", ""]
     for i, row in enumerate(chosen, 1):
         text = row["state"]

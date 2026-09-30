@@ -133,3 +133,72 @@ def test_gates(tmp_path):
     state.require(task, "data")
     steps = {s["step"]: s["done"] for s in state.status(task)}
     assert steps["approve data"] and not steps["approve report"]
+
+
+# --- ingest: documentos e exemplos respondidos por uma pessoa -------------
+
+ONE_Q = {"categoria": {"type": "choice", "instructions": "Qual a categoria?",
+                       "criteria": {"acesso": "login", "rede": "internet"}}}
+
+
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def test_ingest_documents_and_examples(tmp_path):
+    from laya_pipeline.ingest import ingest, load_human
+
+    task = make_task(tmp_path, questions=ONE_Q)
+    docs, ex = tmp_path / "data" / "documentos", tmp_path / "data" / "exemplos"
+    _write(docs / "a.txt", "Minha senha expirou e não consigo entrar no sistema.")
+    _write(docs / "sub" / "b.md", "A VPN cai toda hora desde a manhã de hoje.")
+    _write(docs / "lote.csv", "id;texto\nc1;Impressora do terceiro andar parou de funcionar.\nc2;curto\n")
+    _write(docs / "EXEMPLO-ignorar.txt", "Este arquivo é só um exemplo do template.")
+    _write(docs / "README.md", "explicação da pasta")
+    _write(ex / "acesso" / "1.txt", "Conta bloqueada após três tentativas de login.")
+    _write(ex / "rede" / "EXEMPLO-1.txt", "Arquivo de exemplo do template, não conta.")
+    (tmp_path / "data" / "texts.jsonl").write_text(
+        json.dumps({"id": "s1", "state": "texto sintético", "source": "synthetic"}) + "\n", encoding="utf-8")
+
+    out = ingest(task)
+    assert out["documents"] == 3 and out["human_examples"] == 1 and out["synthetic"] == 1
+    assert out["texts"] == 5
+    assert out["ignored_template_samples"] == 2
+    assert any("curto" in w for w in out["warnings"])
+    human = load_human(task)
+    assert list(human.values()) == [{"categoria": "acesso"}]
+    ids = {json.loads(l)["id"] for l in (tmp_path / "data" / "texts.jsonl").read_text().splitlines()}
+    assert "c1" in ids and "s1" in ids
+
+
+def test_ingest_rejects_unknown_answer_folder(tmp_path):
+    from laya_pipeline.ingest import ingest
+
+    task = make_task(tmp_path, questions=ONE_Q)
+    _write(tmp_path / "data" / "exemplos" / "hardware" / "1.txt", "Monitor não liga de jeito nenhum.")
+    with pytest.raises(SystemExit) as err:
+        ingest(task)
+    assert "hardware" in str(err.value) and "acesso, rede" in str(err.value)
+
+
+def test_human_examples_always_go_to_eval_and_agreement(tmp_path):
+    from laya_pipeline.ingest import ingest
+
+    task = make_task(tmp_path, questions=ONE_Q, data={"eval_fraction": 0.05})
+    for i in range(6):
+        _write(tmp_path / "data" / "exemplos" / "acesso" / ("%d.txt" % i), "Senha bloqueada, caso número %d." % i)
+    ingest(task)
+    texts = [json.loads(l) for l in (tmp_path / "data" / "texts.jsonl").read_text().splitlines()]
+    os.makedirs(task.run_dir)
+    with open(os.path.join(task.run_dir, "labeled.jsonl"), "w", encoding="utf-8") as f:
+        for i, t in enumerate(texts):  # professor discorda em 2 dos 6
+            p = {"acesso": 0.2, "rede": 0.8} if i < 2 else {"acesso": 0.9, "rede": 0.1}
+            f.write(json.dumps({"id": t["id"], "state": t["state"], "gold": {"categoria": {"probabilities": p}}}) + "\n")
+    n_train, n_eval = dataset.split(task)
+    assert (n_train, n_eval) == (0, 6)
+    rows = [json.loads(l) for l in open(os.path.join(task.run_dir, "eval.jsonl"), encoding="utf-8")]
+    assert all(r["human"] == {"categoria": "acesso"} for r in rows)
+    agreement = dataset.teacher_vs_human(task, rows)
+    assert agreement["cases"] == 6 and agreement["agree"] == 4
+    assert "Concordância: **4 de 6" in open(dataset.sample(task, n=2), encoding="utf-8").read()
