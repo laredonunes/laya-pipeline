@@ -38,8 +38,13 @@ já com 2560 resolve o contexto e a acurácia de uma vez.
 A receita de treino do upstream (RLCD) não usa só o rótulo: cada exemplo
 precisa da **distribuição de probabilidade de um professor** em cada opção.
 
-- **Professor:** um LLM que já temos no proxy (DeepSeek, Qwen ou
-  OpenRouter). Ele rotula os textos com probabilidades.
+- **Professor:** um LLM que rotula os textos com probabilidades. Pode ser
+  um dos que já temos no proxy (DeepSeek, Qwen ou OpenRouter) ou um modelo
+  do **Amazon Bedrock** chamado direto com as credenciais AWS. O primeiro
+  modelo de teste usa o DeepSeek V3.2 no Bedrock em `sa-east-1` (v0.3.0).
+- **O Bedrock não treina o Laya.** A customização do Bedrock só vale para os
+  modelos do catálogo dele. O fine-tuning do Laya continua precisando de GPU:
+  Studio Lab, Kaggle ou SageMaker Training Job.
 - **Textos:** reais, se houver. Se não, sintéticos, gerados pelo próprio LLM
   (`gen-texts`).
 - **Teto:** o modelo não fica melhor que o professor. O ganho é responder

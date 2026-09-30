@@ -13,13 +13,13 @@ from typing import Any, Dict, List
 import yaml
 
 QUESTION_TYPES = ("choice", "score", "noul")
-TEACHER_PROVIDERS = ("deepseek", "qwen", "openrouter")
+TEACHER_PROVIDERS = ("deepseek", "qwen", "openrouter", "bedrock")
 
 DEFAULTS: Dict[str, Any] = {
     "language": "pt",
     "base_model": {"id": "convaiinnovations/laya", "subfolder": "multilingual"},
     "context": {"max_len": 2560, "head_max_len": 256},
-    "teacher": {"provider": "deepseek", "model": None, "prompt": "prompts/teacher.md",
+    "teacher": {"provider": "deepseek", "model": None, "region": None, "prompt": "prompts/teacher.md",
                 "generator_prompt": "prompts/generator.md", "concurrency": 4,
                 "temperature": 0.2},
     "data": {"texts": "data/texts.jsonl", "human": "data/human.jsonl",

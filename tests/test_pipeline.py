@@ -202,3 +202,29 @@ def test_human_examples_always_go_to_eval_and_agreement(tmp_path):
     agreement = dataset.teacher_vs_human(task, rows)
     assert agreement["cases"] == 6 and agreement["agree"] == 4
     assert "Concordância: **4 de 6" in open(dataset.sample(task, n=2), encoding="utf-8").read()
+
+
+def test_bedrock_teacher_dispatch_and_usage(tmp_path, monkeypatch):
+    from laya_pipeline import bedrock, teacher
+
+    calls = []
+
+    class FakeClient:
+        def converse(self, **kw):
+            calls.append(kw)
+            return {"output": {"message": {"content": [{"reasoningContent": {}},
+                                                       {"text": '{"categoria": {"acesso": 3, "rede": 1}}'}]}},
+                    "usage": {"inputTokens": 100, "outputTokens": 20}}
+
+    monkeypatch.setitem(bedrock._clients, "sa-east-1", FakeClient())
+    task = make_task(tmp_path, questions=ONE_Q, teacher={"provider": "bedrock"})
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "texts.jsonl").write_text(
+        json.dumps({"id": "t1", "state": "Não consigo entrar, senha bloqueada."}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(teacher, "StateTruncator", lambda task: (lambda s: (s, None)))
+    assert teacher.label(task)["ok"] == 1
+    assert calls[0]["modelId"] == "deepseek.v3.2" and calls[0]["system"][0]["text"] == "Você é um analista."
+    row = json.loads(open(os.path.join(task.run_dir, "labeled.jsonl")).read())
+    assert row["gold"]["categoria"]["probabilities"] == {"acesso": 0.75, "rede": 0.25}
+    usage = json.load(open(os.path.join(task.run_dir, "teacher_usage.json")))
+    assert usage["label"] == {"calls": 1, "input_tokens": 100, "output_tokens": 20}

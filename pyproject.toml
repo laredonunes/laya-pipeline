@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laya-pipeline"
-version = "0.2.0"
+version = "0.3.0"
 description = "Pipeline de treinamento de modelos Laya dedicados (uma tarefa por repositório)"
 requires-python = ">=3.10"
 dependencies = [
@@ -13,6 +13,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Professor direto no Amazon Bedrock (teacher.provider: bedrock).
+bedrock = ["boto3>=1.34"]
 # Só quem avalia/treina precisa do torch + laya. Validar, rotular e dividir
 # rodam com a instalação mínima (ex.: numa Lambda ou no notebook sem GPU).
 train = [

@@ -13,6 +13,21 @@
       `data/exemplos/<resposta>/`), comando `ingest`, exemplos humanos só na
       avaliação e concordância professor x humano na amostra e no relatório — 2026-09-30
 
+- [x] v0.3.0: professor direto no Amazon Bedrock (`teacher.provider: bedrock`),
+      uso de tokens em `teacher_usage.json`, geração mais robusta (JSON com
+      quebras de linha ou aspas, limite de tokens maior, sem markdown) — 2026-09-30
+
+## Modelo de teste em andamento
+
+`laya-teste-tipo-documento` (privado): tipo de documento administrativo,
+6 opções, 2560 tokens, 1.000 textos sintéticos, professor DeepSeek V3.2 no
+Bedrock. Primeiros números (2026-09-30):
+
+- documento de 1.444 palavras = 2.296 tokens (o limite do texto na janela);
+- professor x 12 exemplos: 12/12;
+- geração: ~2.300 tokens de saída por documento; rotulagem: ~1.150 tokens de
+  entrada por texto curto.
+
 ## Próximos passos (1º modelo, à mão)
 
 1. [ ] **Pessoa:** criar `laya-<tarefa>` do template, preencher o `FORMULARIO.md`,

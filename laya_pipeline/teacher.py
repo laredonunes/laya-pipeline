@@ -14,7 +14,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
-from . import proxy
+from . import bedrock, proxy
 from .task import Task, option_keys
 
 
@@ -32,6 +32,36 @@ def read_jsonl(path: str) -> List[Dict[str, Any]]:
 def _append_jsonl(path: str, row: Dict[str, Any], lock: threading.Lock) -> None:
     with lock, open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def chat(task: Task, messages, temperature: float, max_tokens: int = 2048) -> str:
+    """LLM professor: via proxy (deepseek, qwen, openrouter) ou direto no Bedrock."""
+    if task.teacher["provider"] == "bedrock":
+        return bedrock.chat(messages, task.teacher.get("model"), task.teacher.get("region"),
+                            temperature=temperature, max_tokens=max_tokens)
+    return proxy.chat(task.teacher["provider"], messages, task.teacher.get("model"),
+                      temperature=temperature, max_tokens=max_tokens)
+
+
+def _save_usage(task: Task, step: str) -> None:
+    """Acumula os tokens do Bedrock em runs/<versão>/teacher_usage.json (o
+    proxy já registra o próprio uso no /usage)."""
+    if task.teacher["provider"] != "bedrock" or not bedrock.usage["calls"]:
+        return
+    os.makedirs(task.run_dir, exist_ok=True)
+    path = os.path.join(task.run_dir, "teacher_usage.json")
+    data = {}
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    entry = data.setdefault(step, {"calls": 0, "input_tokens": 0, "output_tokens": 0})
+    for key in entry:
+        entry[key] += bedrock.usage[key]
+        bedrock.usage[key] = 0
+    data["model"] = task.teacher.get("model") or bedrock.DEFAULT_MODEL
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+    print("uso do professor (%s, acumulado na versão): %s" % (step, json.dumps(entry)))
 
 
 def _read_prompt(task: Task, key: str) -> str:
@@ -71,7 +101,7 @@ def parse_gold(task: Task, content: str) -> Dict[str, Dict[str, Any]]:
     match = re.search(r"\{.*\}", content, re.S)
     if not match:
         raise ValueError("resposta sem JSON")
-    data = json.loads(match.group(0))
+    data = json.loads(match.group(0), strict=False)
     gold = {}
     for qid, q in task.questions.items():
         probs = data.get(qid)
@@ -157,8 +187,7 @@ def label(task: Task, limit: Optional[int] = None) -> Dict[str, int]:
         error = None
         for _ in range(3):
             try:
-                content = proxy.chat(task.teacher["provider"], messages, task.teacher.get("model"),
-                                     temperature=task.teacher["temperature"])
+                content = chat(task, messages, task.teacher["temperature"])
                 gold = parse_gold(task, content)
                 return {"id": row["id"], "state": state, "state_tokens": n_tokens,
                         "questions": task.questions, "gold": gold,
@@ -181,6 +210,7 @@ def label(task: Task, limit: Optional[int] = None) -> Dict[str, int]:
                 stats["failed"] += 1
             if i % 25 == 0 or i == len(todo):
                 print("rotulados %d/%d (falhas: %d)" % (i, len(todo), stats["failed"]), flush=True)
+    _save_usage(task, "label")
     return stats
 
 
@@ -216,14 +246,23 @@ def generate_texts(task: Task, n: int, seed: int = 0,
         user = (
             "Escreva UM texto novo, realista e em português do Brasil, com cerca de %d palavras, "
             "que corresponda a:\n%s\n\nVarie nomes, datas, estilo e estrutura. Não mencione "
-            'estas instruções no texto. Responda APENAS com JSON: {"text": "..."}' % (n_words, hints)
+            'estas instruções no texto. Escreva texto puro, sem markdown (nada de **, # ou '
+            'marcadores de lista do markdown). Responda APENAS com JSON: {"text": "..."}' % (n_words, hints)
         )
-        content = proxy.chat(task.teacher["provider"],
-                             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                             task.teacher.get("model"), temperature=0.9,
-                             max_tokens=min(8000, int(n_words * 2.5) + 200))
+        content = chat(task, [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                       temperature=0.9, max_tokens=min(8000, int(n_words * 4) + 400))
         match = re.search(r"\{.*\}", content, re.S)
-        text = json.loads(match.group(0))["text"].strip() if match else ""
+        if not match:
+            raise ValueError("resposta sem JSON completo (%d caracteres; limite de tokens?)" % len(content))
+        # strict=False: LLMs costumam pôr quebras de linha cruas dentro da string.
+        try:
+            text = json.loads(match.group(0), strict=False)["text"].strip()
+        except json.JSONDecodeError:
+            # Aspas sem escape dentro do documento: recupera o miolo de {"text": "..."}.
+            loose = re.search(r'"text"\s*:\s*"(.*)"\s*\}\s*$', match.group(0), re.S)
+            if not loose:
+                raise
+            text = loose.group(1).replace('\\n', '\n').replace('\\"', '"').strip()
         return text, hints
 
     written = 0
@@ -235,12 +274,14 @@ def generate_texts(task: Task, n: int, seed: int = 0,
                 print("falha ao gerar texto: %s" % error)
                 continue
             if len(text) < 200:
+                print("texto gerado curto demais (%d caracteres), descartado" % len(text))
                 continue
             _append_jsonl(out_path, {"id": text_id(text), "state": text,
                                      "source": "synthetic", "hint": hints}, lock)
             written += 1
             if written % 25 == 0:
                 print("gerados %d/%d" % (written, n), flush=True)
+    _save_usage(task, "gen-texts")
     return written
 
 

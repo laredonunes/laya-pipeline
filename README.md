@@ -52,9 +52,15 @@ pip install -e '.[train]'   # avaliar e treinar (torch + laya)
 pip install -e '.[dev]' && pytest
 ```
 
-Variáveis de ambiente: `HERMES_PROXY_URL` e `HERMES_TOKEN`. Todo acesso
-externo (LLM professor e S3) passa pelo hermes-usage-proxy do `provedor-ia`;
-não são necessárias credenciais AWS nem chaves de LLM.
+Variáveis de ambiente: `HERMES_PROXY_URL` e `HERMES_TOKEN`. Por padrão, todo
+acesso externo (LLM professor e S3) passa pelo hermes-usage-proxy do
+`provedor-ia`, sem credenciais AWS nem chaves de LLM.
+
+**Professor no Amazon Bedrock:** com `teacher.provider: bedrock` no
+`task.yaml`, a rotulagem e a geração chamam o Bedrock direto (API Converse),
+com as credenciais AWS do ambiente. Instale com `pip install -e '.[bedrock]'`.
+Padrão: `model: deepseek.v3.2`, `region: sa-east-1`. Esse uso não passa pelo
+`/usage` do proxy; os tokens ficam em `runs/<versão>/teacher_usage.json`.
 
 ## Como funciona o treino
 
