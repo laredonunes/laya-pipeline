@@ -1,0 +1,7 @@
+laya-pipeline
+
+laya_pipeline/train.py e laya_pipeline/hf.py (fix_tokenizer_config) são
+adaptados do projeto Laya (https://github.com/NandhaKishorM/laya), dos
+seus autores, licenciado sob a Apache License 2.0 — texto
+completo em UPSTREAM-LICENSE-laya. As mudanças estão descritas no
+docstring de cada arquivo.

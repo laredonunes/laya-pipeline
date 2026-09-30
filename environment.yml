@@ -1,0 +1,12 @@
+# Ambiente para o SageMaker Studio Lab (GPU T4). No terminal do Studio Lab:
+#   conda env create -f environment.yml && conda activate laya-pipeline
+# e selecione o kernel "laya-pipeline" no notebook.
+name: laya-pipeline
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - ipykernel
+  - pip:
+      - "laya-pipeline[train] @ git+https://github.com/laredonunes/laya-pipeline.git@v0.1.0"

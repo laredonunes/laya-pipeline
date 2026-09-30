@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laya-pipeline"
+version = "0.1.0"
+description = "Pipeline de treinamento de modelos Laya dedicados (uma tarefa por repositório)"
+requires-python = ">=3.10"
+dependencies = [
+    "pyyaml>=6",
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# Só quem avalia/treina precisa do torch + laya. Validar, rotular e dividir
+# rodam com a instalação mínima (ex.: numa Lambda ou no notebook sem GPU).
+train = [
+    "laya==0.3.5",
+    "torch>=2.2",
+    "transformers>=4.48",
+    "safetensors>=0.4",
+    "huggingface_hub>=0.23",
+]
+dev = ["pytest>=8"]
+
+[project.scripts]
+laya-pipeline = "laya_pipeline.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["laya_pipeline*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
