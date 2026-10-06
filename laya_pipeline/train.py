@@ -224,6 +224,7 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
 
     state_path = os.path.join(task.run_dir, "train_state.pt")
     start_epoch = 0
+    state = None
     hyperparams = {k: hp[k] for k in sorted(hp)}
     if os.path.exists(state_path) and max_steps is None:
         state = torch.load(state_path, map_location=device, weights_only=False)
