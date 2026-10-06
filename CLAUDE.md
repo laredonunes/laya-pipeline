@@ -32,6 +32,10 @@ os repositórios de tarefa fixam a tag no `requirements.txt`.
   checkpoint dele é recusado pelo `publish`.
 - A divisão treino/avaliação é por hash do id: nunca troque para aleatória
   (vazaria avaliação para o treino entre versões).
-- Testes: `pytest` (sem torch nem rede). Teste de fumaça do treino em CPU:
-  ver `bench/` e a skill do template.
+- Testes: `pytest` (a suíte de `tests/test_pipeline.py` roda sem torch nem rede).
+  `tests/test_fumaca_treino.py` roda o `train()` de verdade em CPU com modelo e
+  tokenizer falsos (exige o extra `[train]`; existe porque o HF é bloqueado na
+  estação e o caminho de treino, sem isso, só é exercitado na GPU). **Rodada de
+  GPU só depois de `pytest` verde**: foi um `UnboundLocalError` só visível com
+  torch que queimou o passo 8 de uma rodada inteira.
 - Código adaptado do upstream mantém a atribuição (NOTICE + docstring).
