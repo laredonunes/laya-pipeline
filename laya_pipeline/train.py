@@ -53,8 +53,46 @@ def preprocess(tok, cfg, rows: List[Dict[str, Any]]):
             if item is None:
                 skipped += 1
             else:
+                item["qid"] = qid          # o peso de classe é por pergunta
                 items.append(item)
     return items, skipped
+
+
+def option_weights(items: List[Dict[str, Any]], mode: str = "none") -> List[List[float]]:
+    """Peso por opção de cada item (função pura: dá para testar sem torch).
+
+    `none` (padrão) devolve 1.0 para tudo — o comportamento de sempre.
+    `auto` equilibra as OPÇÕES da pergunta pela massa que elas têm no conjunto:
+    w_o = média(M)/M_o, onde M_o é a soma da probabilidade da opção o nos alvos
+    do professor. Com o objetivo sendo soft-CE contra essas probabilidades, o
+    modelo aprende o prior do TREINO; quando a régua tem outro prior (medido:
+    29% de positivos no treino contra ~80% na avaliação), sem peso ele erra por
+    baixo — e o erro caro desta tarefa é o falso negativo.
+    """
+    pesos = [[1.0] * len(it["target"]) for it in items]
+    if mode == "none":
+        return pesos
+    massa: Dict[str, List[float]] = {}
+    for it in items:
+        acc = massa.setdefault(it["qid"], [0.0] * len(it["target"]))
+        for i, valor in enumerate(it["target"]):
+            acc[i] += valor
+    fator = {qid: [(sum(acc) / len(acc)) / v if v > 0 else 1.0 for v in acc]
+             for qid, acc in massa.items()}
+    for it, linha in zip(items, pesos):
+        f = fator[it["qid"]]
+        for i in range(len(linha)):
+            linha[i] = f[i] if i < len(f) else 1.0
+    return pesos
+
+
+def weights_by_question(items: List[Dict[str, Any]]) -> Dict[str, List[float]]:
+    """Um exemplo de vetor de peso por pergunta (para imprimir no log)."""
+    vistos: Dict[str, List[float]] = {}
+    for it in items:
+        if it["qid"] not in vistos and it.get("weight"):
+            vistos[it["qid"]] = [round(float(x), 3) for x in it["weight"]]
+    return vistos
 
 
 def collate(items, pad_id):
@@ -67,6 +105,7 @@ def collate(items, pad_id):
     mpos = torch.zeros((n, kmax), dtype=torch.long)
     mmask = torch.zeros((n, kmax), dtype=torch.bool)
     target = torch.zeros((n, kmax), dtype=torch.float32)
+    weight = torch.ones((n, kmax), dtype=torch.float32)
     for i, it in enumerate(items):
         ids[i, : len(it["ids"])] = torch.tensor(it["ids"])
         att[i, : len(it["ids"])] = 1
@@ -74,8 +113,10 @@ def collate(items, pad_id):
         mpos[i, :k] = torch.tensor(it["markers"])
         mmask[i, :k] = True
         target[i, : len(it["target"])] = torch.tensor(it["target"], dtype=torch.float32)
+        if it.get("weight"):
+            weight[i, : len(it["weight"])] = torch.tensor(it["weight"], dtype=torch.float32)
     return {"input_ids": ids, "attention_mask": att, "marker_pos": mpos, "marker_mask": mmask,
-            "target": target, "qtype": torch.tensor([it["qtype"] for it in items])}
+            "target": target, "weight": weight, "qtype": torch.tensor([it["qtype"] for it in items])}
 
 
 def _forward(model, batch, device, use_amp):
@@ -165,6 +206,12 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
     train_items = [all_items[i] for i in sorted(order[n_calib:])]
 
     micro, accum, group_size, epochs = hp["micro_batch"], hp["grad_accum"], 4, hp["epochs"]
+    peso_modo = str(hp.get("class_weight", "none"))
+    for item, peso in zip(train_items, option_weights(train_items, peso_modo)):
+        item["weight"] = peso
+    if peso_modo != "none":
+        for qid, vetor in weights_by_question(train_items).items():
+            print("peso de classe (%s) %s: %s" % (peso_modo, qid, vetor), flush=True)
     enc_params = [p for n, p in model.named_parameters() if "encoder." in n]
     head_params = [p for n, p in model.named_parameters() if "encoder." not in n]
     optimizer = torch.optim.AdamW([{"params": enc_params, "lr": hp["lr_encoder"]},
@@ -177,8 +224,18 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
 
     state_path = os.path.join(task.run_dir, "train_state.pt")
     start_epoch = 0
+    hyperparams = {k: hp[k] for k in sorted(hp)}
     if os.path.exists(state_path) and max_steps is None:
         state = torch.load(state_path, map_location=device, weights_only=False)
+        anterior = state.get("hyperparams")
+        if anterior is not None and anterior != hyperparams:
+            # O estado carrega pesos treinados com outro objetivo (epochs, peso de
+            # classe, lr...). Retomar dali treinaria o novo com a mistura do velho:
+            # começa do zero e diz por quê.
+            print("train_state.pt é de outra configuração (%s)\n  agora: %s\n  começando do zero"
+                  % (anterior, hyperparams), flush=True)
+            state = None
+    if state is not None:
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
@@ -192,6 +249,11 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
                                                 steps_per_epoch, micro, accum), flush=True)
     log_path = os.path.join(task.run_dir, "train_log.jsonl")
     steps_done = start_epoch * steps_per_epoch
+    if start_epoch == 0 and max_steps is None:
+        # O log é de UMA rodada: o arquivo volta pelo `sync pull` com as épocas da
+        # rodada anterior e, sem isto, o resumo mistura as duas (na 0.3.0 ficaram
+        # 48 linhas para 4 épocas de uma rodada e 24 da seguinte).
+        open(log_path, "w").close()
     for epoch in range(start_epoch, epochs):
         random.Random(hp["seed"] + epoch).shuffle(train_items)
         sigma = 0.4 + (0.1 - 0.4) * (epoch / max(1, epochs - 1))
@@ -215,8 +277,14 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
                 adv = r - r.mean(0, keepdim=True)
                 adv = adv / (adv.std() + 1e-6)
             logp = -(((z - logits.unsqueeze(0)) ** 2) * mask).sum(-1) / (2 * sigma ** 2)
+            # Soft-CE ponderada pelo peso de classe da opção. Com peso 1.0 (o
+            # padrão) o resultado é idêntico ao de antes: a divisão por
+            # (target*peso).sum() só existe para a escala da perda não mudar
+            # quando o equilíbrio está ligado.
+            peso = batch["weight"].to(device)
+            alvo = (target * peso) / (target * peso).sum(-1, keepdim=True).clamp_min(1e-6)
             loss = (-(adv * logp).mean()
-                    - (target * torch.log_softmax(logits.masked_fill(~mask, -1e4), -1)).sum(-1).mean())
+                    - (alvo * torch.log_softmax(logits.masked_fill(~mask, -1e4), -1)).sum(-1).mean())
 
             (scaler.scale(loss / accum) if scaler else loss / accum).backward()
             epoch_loss += loss.item()
@@ -250,7 +318,8 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
             break
         torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
                     "scheduler": scheduler.state_dict(),
-                    "scaler": scaler.state_dict() if scaler else None, "epoch": epoch}, state_path)
+                    "scaler": scaler.state_dict() if scaler else None, "epoch": epoch,
+                    "hyperparams": hyperparams}, state_path)
 
     model.eval()
     calib_preds = []
@@ -278,7 +347,8 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
     cfg.update({"fine_tuned": True, "temperature": fitted, "task": task.name,
                 "task_version": task.version,
                 "training": {"epochs": epochs, "train_items": len(train_items),
-                             "calib_items": len(calib_items), "smoke_test": max_steps is not None}})
+                             "calib_items": len(calib_items), "smoke_test": max_steps is not None,
+                             "class_weight": peso_modo}})
     with open(os.path.join(out_dir, "rl_agent_config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
     if os.path.exists(state_path) and max_steps is None:

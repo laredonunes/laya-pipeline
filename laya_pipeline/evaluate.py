@@ -48,10 +48,12 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
         rows = rows[:limit]
 
     agent = load_agent(task, checkpoint, device)
-    metrics = {qid: QuestionMetrics(q["type"], option_keys(q)) for qid, q in task.questions.items()}
+    metrics = {qid: QuestionMetrics(q["type"], option_keys(q), task.threshold(qid))
+               for qid, q in task.questions.items()}
     latencies: List[float] = []
     worst: List[Dict[str, Any]] = []
     vs_human = {"cases": 0, "agree": 0}
+    casos: List[Dict[str, Any]] = []   # predição por caso: viaja no eval_<rótulo>.json
 
     agent.system_one(rows[0]["state"], task.questions)  # aquecimento, fora da medição
     for i, row in enumerate(rows, 1):
@@ -62,13 +64,19 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
             pred = to_probabilities(q, out["answers"][qid])
             gold = row["gold"][qid]["probabilities"]
             metrics[qid].add(pred, gold)
+            decidido = metrics[qid].decide(pred)
+            esperado = max(gold, key=gold.get)
             expected = row.get("human", {}).get(qid)
             if expected is not None:
                 vs_human["cases"] += 1
-                vs_human["agree"] += int(max(pred, key=pred.get) == expected)
-            if max(pred, key=pred.get) != max(gold, key=gold.get):
+                vs_human["agree"] += int(decidido == expected)
+            casos.append({"id": row["id"], "question": qid, "source": row.get("source", ""),
+                          "p": {k: round(float(v), 4) for k, v in pred.items()},
+                          "decision": decidido, "gold": esperado, "human": expected})
+            if decidido != esperado:
                 worst.append({"id": row["id"], "question": qid, "gold": gold, "pred": pred,
-                              "gap": round(max(gold.values()) - gold.get(max(pred, key=pred.get), 0), 4),
+                              "decision": decidido,
+                              "gap": round(max(gold.values()) - gold.get(decidido, 0), 4),
                               "excerpt": row["state"][:300]})
         if i % 50 == 0:
             print("avaliados %d/%d" % (i, len(rows)), flush=True)
@@ -79,11 +87,13 @@ def evaluate(task: Task, label: str, checkpoint: Optional[str] = None,
         "task": task.name, "version": task.version, "label": label,
         "checkpoint": checkpoint or "%s/%s" % (task.base_model["id"], task.base_model.get("subfolder") or ""),
         "device": str(agent.device), "max_len": task.context["max_len"], "cases": len(rows),
+        "decision": {qid: {"threshold": task.threshold(qid)} for qid in task.questions},
         "overall": overall(per_question), "questions": per_question,
         "confusion": {qid: m.confusion() for qid, m in metrics.items()},
         "latency_s": {"p50": round(percentile(latencies, 50), 3),
                       "p95": round(percentile(latencies, 95), 3)},
         "worst_errors": worst[:15],
+        "cases_detail": casos,
         "vs_human": dict(vs_human, accuracy=round(vs_human["agree"] / vs_human["cases"], 4)
                          if vs_human["cases"] else None),
     }
@@ -101,6 +111,34 @@ def check_goals(task: Task, result: Dict[str, Any]) -> Dict[str, Optional[bool]]
         else ov.get("accuracy", 0) >= goals["min_accuracy"],
         "max_ece": None if goals.get("max_ece") is None else ov.get("ece", 1) <= goals["max_ece"],
     }
+
+
+def matriz_de_confusao(task: Task, resultado: Dict[str, Any]) -> List[str]:
+    """Matriz do treinado + a regra de decisão, para o portão 2 ler sem adivinhar.
+
+    O relatório é o que a pessoa lê no portão; com limiar, a contagem de falsos
+    negativos (o erro caro desta tarefa) deixou de ser derivável da acurácia.
+    """
+    linhas: List[str] = []
+    for qid, table in (resultado.get("confusion") or {}).items():
+        chaves = list(table.keys())
+        limiar = task.threshold(qid)
+        linhas.append("`%s` — decisão: %s" % (
+            qid, "p(true) >= %.3f" % limiar if limiar is not None
+            else "argmax (sem `threshold` no task.yaml)"))
+        linhas.append("")
+        linhas.append("| professor \\ modelo | %s |" % " | ".join(chaves))
+        linhas.append("|---|%s" % ("---|" * len(chaves)))
+        for g in chaves:
+            linhas.append("| %s | %s |" % (g, " | ".join(str(table[g].get(m, 0)) for m in chaves)))
+        linhas.append("")
+        if len(chaves) == 2:
+            linhas.append("Falsos negativos (dizer `%s` num caso `%s`): **%d**. "
+                          "Falsos positivos: **%d**."
+                          % (chaves[0], chaves[1], table[chaves[1]][chaves[0]],
+                             table[chaves[0]][chaves[1]]))
+            linhas.append("")
+    return linhas
 
 
 def write_report(task: Task) -> str:
@@ -132,8 +170,11 @@ def write_report(task: Task) -> str:
             lines.append("- %s: %s" % (qid, ", ".join("%s=%s" % kv for kv in m.items())))
         lines.append("")
     if "trained" in runs:
+        matriz = matriz_de_confusao(task, runs["trained"])
+        if matriz:
+            lines += ["## Matriz de confusão (treinado)", ""] + matriz
         goals = check_goals(task, runs["trained"])
-        lines += ["## Metas", ""] + ["- %s: %s" % (k, {None: "não definida", True: "atingida",
+        lines += ["## Metas (no ponto de operação)", ""] + ["- %s: %s" % (k, {None: "não definida", True: "atingida",
                                                          False: "NÃO atingida"}[v])
                                       for k, v in goals.items()] + [""]
         lines += ["## Piores erros (treinado)", ""]

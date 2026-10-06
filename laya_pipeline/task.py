@@ -8,7 +8,7 @@ erro descoberto depois de horas de GPU custa a rodada inteira."""
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import yaml
 
@@ -26,7 +26,7 @@ DEFAULTS: Dict[str, Any] = {
              "documents": "data/documentos", "examples": "data/exemplos",
              "eval_fraction": 0.1, "min_texts": 200},
     "train": {"epochs": 4, "micro_batch": 2, "grad_accum": 8, "lr_encoder": 2.5e-5,
-              "lr_head": 1.0e-4, "seed": 0},
+              "lr_head": 1.0e-4, "seed": 0, "class_weight": "none"},
     "goals": {"min_accuracy": None, "max_ece": None, "max_latency_p95_s": None},
     "publish": {"s3_prefix": "models/laya/"},
 }
@@ -67,6 +67,17 @@ class Task:
     def s3_key_prefix(self) -> str:
         return "%s%s/%s/" % (self.publish["s3_prefix"].rstrip("/") + "/", self.name, self.version)
 
+    def threshold(self, qid: str) -> Optional[float]:
+        """Ponto de operação da pergunta (chave `threshold` do task.yaml) ou None = argmax.
+
+        Fica fora de `normalize_question` de propósito: o dataset (train/eval jsonl)
+        carrega texto e gabarito, não regra de decisão — quem decide onde cortar é o
+        `eval`, lendo o task.yaml da versão.
+        """
+        q = (self.raw.get("questions") or {}).get(qid) or {}
+        limiar = q.get("threshold")
+        return None if limiar is None else float(limiar)
+
 
 def _merge(defaults: Dict[str, Any], given: Any) -> Dict[str, Any]:
     out = dict(defaults)
@@ -104,6 +115,15 @@ def _check_question(qid: str, q: Any, errors: List[str]) -> None:
             errors.append("%s.criteria: score precisa de uma lista com pelo menos 2 níveis" % where)
     elif crit is not None and (not isinstance(crit, dict) or set(crit) - {"true", "false"}):
         errors.append("%s.criteria: noul aceita só {true: ..., false: ...}" % where)
+    limiar = q.get("threshold")
+    if limiar is not None:
+        if t != "noul":
+            errors.append("%s.threshold: só existe em pergunta `noul` (nas outras a decisão é o "
+                          "argmax da distribuição)" % where)
+        elif isinstance(limiar, bool) or not isinstance(limiar, (int, float)) \
+                or not 0.0 < float(limiar) < 1.0:
+            errors.append("%s.threshold: número entre 0 e 1 (ex.: 0.05) — é o ponto de operação "
+                          "em que p(true) já vale como `true`" % where)
 
 
 def normalize_question(q: Dict[str, Any]) -> Dict[str, Any]:
@@ -182,6 +202,9 @@ def load_task(root: str = ".") -> Task:
     for key in ("epochs", "micro_batch", "grad_accum"):
         if not isinstance(train[key], int) or train[key] < 1:
             errors.append("train.%s: inteiro >= 1" % key)
+    if train.get("class_weight") not in ("none", "auto"):
+        errors.append("train.class_weight: 'none' (padrão) ou 'auto' (equilibra as opções pela "
+                      "massa que elas têm no treino)")
 
     goals = _merge(DEFAULTS["goals"], raw.get("goals"))
     publish = _merge(DEFAULTS["publish"], raw.get("publish"))

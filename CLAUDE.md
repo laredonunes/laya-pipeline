@@ -8,7 +8,10 @@ faz, generalize a funcionalidade e exponha no `task.yaml`.
 ## Contratos que não podem quebrar sem subir a versão
 
 1. **`task.yaml`** (`laya_pipeline/task.py`): chaves e defaults. Chave nova
-   precisa de default que mantenha o comportamento antigo.
+   precisa de default que mantenha o comportamento antigo. O ponto de operação
+   é do dono do dado, não do motor: `questions.<qid>.threshold` (só em `noul`)
+   diz onde p(true) já vale como `true`, e `train.class_weight` (`none`|`auto`)
+   equilibra as opções no treino pela massa que elas têm no conjunto.
 2. **Formato do dataset** (`{id, state, questions, gold}`, gold =
    `{qid: {probabilities: {opção: p}}}`) — o mesmo do upstream.
 3. **Layout no S3** (`models/laya/<tarefa>/<versão>/checkpoint/...` +

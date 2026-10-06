@@ -228,3 +228,91 @@ def test_bedrock_teacher_dispatch_and_usage(tmp_path, monkeypatch):
     assert row["gold"]["categoria"]["probabilities"] == {"acesso": 0.75, "rede": 0.25}
     usage = json.load(open(os.path.join(task.run_dir, "teacher_usage.json")))
     assert usage["label"] == {"calls": 1, "input_tokens": 100, "output_tokens": 20}
+
+
+# --- ponto de operação (threshold) e peso de classe -----------------------
+
+
+def test_threshold_muda_a_decisao_e_nao_e_sempre_true():
+    from laya_pipeline.metrics import QuestionMetrics
+
+    pred = {"false": 0.55, "true": 0.45}
+    gold = {"false": 0.1, "true": 0.9}          # o erro caro: positivos que o argmax perde
+
+    argmax = QuestionMetrics("noul", ["false", "true"])
+    argmax.add(pred, gold)
+    assert argmax.summary()["accuracy"] == 0.0
+    assert argmax.confusion()["true"]["false"] == 1
+
+    com_limiar = QuestionMetrics("noul", ["false", "true"], threshold=0.05)
+    com_limiar.add(pred, gold)
+    assert com_limiar.summary()["accuracy"] == 1.0
+    assert com_limiar.summary()["threshold"] == 0.05
+    assert com_limiar.confusion()["true"]["true"] == 1
+    # o limiar não vira "sempre true": 0,04 continua abaixo de 0,05
+    assert com_limiar.decide({"false": 0.96, "true": 0.04}) == "false"
+    assert com_limiar.decide({"false": 0.96, "true": 0.0501}) == "true"
+
+
+def test_limiar_so_em_noul_e_fora_do_dataset(tmp_path):
+    q = json.loads(json.dumps(TASK["questions"]))
+    q["escalar"]["threshold"] = 0.05
+    task = make_task(tmp_path, questions=q)
+    assert task.threshold("escalar") == 0.05 and task.threshold("tipo") is None
+    # o dataset carrega texto e gabarito, não regra de decisão
+    assert "threshold" not in task.questions["escalar"]
+
+    q["escalar"]["threshold"] = 1.5
+    with pytest.raises(TaskError) as err:
+        make_task(tmp_path, questions=q)
+    assert "threshold" in str(err.value)
+
+    q["escalar"] = {"type": "choice", "instructions": "?", "criteria": {"a": None, "b": None},
+                    "threshold": 0.2}
+    with pytest.raises(TaskError) as err:
+        make_task(tmp_path, questions=q)
+    assert "só existe em pergunta `noul`" in str(err.value)
+
+
+def test_class_weight_default_e_validacao(tmp_path):
+    assert make_task(tmp_path).train["class_weight"] == "none"
+    assert make_task(tmp_path, train={"class_weight": "auto"}).train["class_weight"] == "auto"
+    with pytest.raises(TaskError) as err:
+        make_task(tmp_path, train={"class_weight": "sim"})
+    assert "class_weight" in str(err.value)
+
+
+def test_option_weights_equilibram_as_opcoes():
+    from laya_pipeline.train import option_weights
+
+    itens = [{"qid": "p", "target": [0.99, 0.01]},
+             {"qid": "p", "target": [0.98, 0.02]},
+             {"qid": "p", "target": [0.97, 0.03]},
+             {"qid": "p", "target": [0.01, 0.99]}]
+    # massa: false 2,95 | true 1,05 -> média 2,00 -> w = [0,678, 1,905]
+    pesos = option_weights(itens, "auto")
+    assert pesos[0] == pytest.approx([0.678, 1.905], abs=1e-3)
+    assert pesos[3] == pytest.approx([0.678, 1.905], abs=1e-3)
+    assert option_weights(itens, "none") == [[1.0, 1.0]] * 4
+
+
+def test_peso_1_nao_muda_a_ce():
+    """A normalização existe para o equilíbrio não mexer na escala da perda."""
+    alvo = np.array([[0.99, 0.01], [0.01, 0.99]])
+    logits = np.array([[2.0, -2.0], [-1.0, 1.5]])
+
+    def log_softmax(z):
+        return z - np.log(np.exp(z - z.max(-1, keepdims=True)).sum(-1, keepdims=True)) \
+            - z.max(-1, keepdims=True)
+
+    def ce(target, peso=None):
+        if peso is None:
+            w = target
+        else:
+            w = (target * peso) / (target * peso).sum(-1, keepdims=True)
+        return -(w * log_softmax(logits)).sum(-1)
+
+    assert ce(alvo, np.ones_like(alvo)) == pytest.approx(ce(alvo))
+    com_peso = ce(alvo, np.array([[0.678, 1.905]] * 2))
+    assert com_peso.shape == (2,) and com_peso[1] < com_peso[0]   # o positivo pesa mais
+
