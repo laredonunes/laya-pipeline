@@ -180,3 +180,29 @@ def test_estado_de_outra_configuracao_e_ignorado(tarefa, capsys):
     assert "retomando da época" not in saida
     with open(os.path.join(tarefa.run_dir, "train_log.jsonl"), encoding="utf-8") as fh:
         assert [json.loads(l)["epoch"] for l in fh if l.strip()] == [1, 2]
+
+
+def test_modo_deterministico_liga_as_travas(tarefa, capsys):
+    """`train.deterministic: true` chama as travas do torch e o treino termina.
+
+    A reprodutibilidade em si só se mede na GPU (foi uma corrida de kernel que fez
+    duas execuções de mesma semente divergirem); aqui se prova que o flag chega às
+    travas, que o treino não quebra com elas e que o checkpoint as registra.
+    """
+    antes = os.environ.get("CUBLAS_WORKSPACE_CONFIG")
+    os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+    assert not torch.are_deterministic_algorithms_enabled()   # o padrão do motor é ligado
+    tarefa.train["deterministic"] = True
+    try:
+        treino.train(tarefa, device="cpu")
+    finally:
+        torch.use_deterministic_algorithms(False)
+
+    assert torch.backends.cudnn.deterministic
+    assert os.environ.get("CUBLAS_WORKSPACE_CONFIG") == ":4096:8"
+    assert "modo determinístico: ligado" in capsys.readouterr().out
+    assert _config(tarefa)["training"]["deterministic"] is True
+    if antes is None:
+        os.environ.pop("CUBLAS_WORKSPACE_CONFIG", None)
+    else:
+        os.environ["CUBLAS_WORKSPACE_CONFIG"] = antes

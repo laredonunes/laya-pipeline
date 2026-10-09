@@ -26,7 +26,7 @@ DEFAULTS: Dict[str, Any] = {
              "documents": "data/documentos", "examples": "data/exemplos",
              "eval_fraction": 0.1, "min_texts": 200},
     "train": {"epochs": 4, "micro_batch": 2, "grad_accum": 8, "lr_encoder": 2.5e-5,
-              "lr_head": 1.0e-4, "seed": 0, "class_weight": "none"},
+              "lr_head": 1.0e-4, "seed": 0, "class_weight": "none", "deterministic": False},
     "goals": {"min_accuracy": None, "max_ece": None, "max_latency_p95_s": None},
     "publish": {"s3_prefix": "models/laya/"},
 }
@@ -205,6 +205,9 @@ def load_task(root: str = ".") -> Task:
     if train.get("class_weight") not in ("none", "auto"):
         errors.append("train.class_weight: 'none' (padrão) ou 'auto' (equilibra as opções pela "
                       "massa que elas têm no treino)")
+    if not isinstance(train.get("deterministic"), bool):
+        errors.append("train.deterministic: true ou false (padrão false) — com true o motor liga as "
+                      "travas de kernel do CUDA; sem elas duas execuções de mesma semente divergem")
 
     goals = _merge(DEFAULTS["goals"], raw.get("goals"))
     publish = _merge(DEFAULTS["publish"], raw.get("publish"))

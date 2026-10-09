@@ -40,8 +40,42 @@ O modelo treinado piorou, o que é esperado com 51 exemplos e 1 época. Isso
 também mostra que os portões funcionam: as metas do `task.yaml` não foram
 atingidas e o `publish` recusaria o checkpoint.
 
+## Ruído entre execuções idênticas e o modo determinístico (2026-10-07)
+
+Duas execuções do **mesmo** treino — mesma entrega, mesmo `train.jsonl` (byte a byte),
+mesma semente (`seed: 0`), mesma GPU (T4), sessões novas — divergiram em **20 dos 294
+casos** de avaliação (6,8%). A acurácia de uma das réguas andou de 0,8696 para 0,9058,
+**cruzando** a meta de 0,90: o número de uma execução isolada deixou de decidir portão.
+
+Causa: o `train()` fixava a semente, mas treinava com `autocast` fp16 (o backward usa
+somas atômicas) e sem nenhuma trava de kernel — o cuDNN escolhe algoritmo por heurística
+e o cuBLAS por workspace disponível. A época 1 saía idêntica nas duas execuções; a
+divergência começava no primeiro `optimizer.step()`.
+
+Conserto: `train.deterministic: true` no `task.yaml` liga, **antes** de qualquer uso do
+CUDA, `torch.use_deterministic_algorithms(True)`, `cudnn.deterministic = True`,
+`cudnn.benchmark = False` e `CUBLAS_WORKSPACE_CONFIG=:4096:8`. O padrão continua `false`
+— quem quer reprodutibilidade pede. Com `use_deterministic_algorithms(True)` estrito, uma
+operação sem implementação determinística **derruba o treino nomeando a operação** (nos
+primeiros segundos, porque todo o laço roda desde o primeiro micro-lote): é diagnóstico,
+não defeito.
+
+O custo em GPU ainda não foi medido — a conta do treino de 24 épocas era de ~145 s e o
+modo determinístico só restringe a escolha de algoritmo; a primeira rodada com a trava
+ligada dá o número.
+
+## Onde o tempo de GPU vai (medido, não corrigido)
+
+No mesmo treino de 24 épocas: **145 s** somados de conta (≈6 s/época) contra **23min42**
+de parede numa execução e **33min25** na outra — a diferença é quase toda
+`torch.save` do estado completo (modelo + otimizador + escalonador, ~3–4 GB) **ao fim de
+cada época**, dentro do laço mas fora do cronômetro da época. Gravar o estado a cada N
+épocas (com N > 1) encurtaria a rodada de 25 min para ~7 min ao custo de reprocessar até
+N-1 épocas depois de uma queda. **Decisão pendente.**
+
 ## Testes automatizados
 
-`pytest`: 10 testes, sem torch nem rede. Cobrem a validação do
-`task.yaml`, o parse da resposta do professor, a estabilidade da divisão,
-as métricas e os portões.
+`pytest`: 24 testes — 19 em `tests/test_pipeline.py` (sem torch nem rede: validação do
+`task.yaml`, parse da resposta do professor, estabilidade da divisão, métricas e portões) e
+5 em `tests/test_fumaca_treino.py` (com torch em CPU, modelo e tokenizer falsos: o laço de
+`train()` de verdade, retomada, log por rodada e o modo determinístico).

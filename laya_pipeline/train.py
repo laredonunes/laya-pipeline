@@ -172,6 +172,21 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
     use_amp = device.type == "cuda"
     torch.manual_seed(hp["seed"])
     random.seed(hp["seed"])
+    if hp.get("deterministic"):
+        # Sem estas travas duas execuções com a MESMA semente divergem: o backward em
+        # fp16 usa kernels de soma atômica e o cuDNN escolhe algoritmo por heurística.
+        # Medido em 07/10/2026 na tarefa do identimove: mesma entrega, mesmo
+        # train.jsonl e mesma semente -> 20 dos 294 casos de avaliação mudaram de
+        # decisão e a régua do TCE andou de 0,8696 para 0,9058 (a meta era 0,90).
+        # Custou ~6 s/época de GPU nos 24 epochs daquela tarefa.
+        # CUBLAS_WORKSPACE_CONFIG tem de estar no ambiente ANTES do primeiro uso do
+        # cuBLAS (CUDA >= 10.2) -- por isso é a primeira linha, antes do modelo.
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+        torch.use_deterministic_algorithms(True)
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cuda.matmul.allow_tf32 = False
+        print("modo determinístico: ligado (kernels de CUDA sem corrida)", flush=True)
     print("dispositivo:", device, flush=True)
 
     model_dir = base_model_dir(task.base_model["id"], task.base_model.get("subfolder"))
@@ -349,7 +364,8 @@ def train(task: Task, device: Optional[str] = None, max_steps: Optional[int] = N
                 "task_version": task.version,
                 "training": {"epochs": epochs, "train_items": len(train_items),
                              "calib_items": len(calib_items), "smoke_test": max_steps is not None,
-                             "class_weight": peso_modo}})
+                             "class_weight": peso_modo,
+                             "deterministic": bool(hp.get("deterministic"))}})
     with open(os.path.join(out_dir, "rl_agent_config.json"), "w") as f:
         json.dump(cfg, f, indent=2)
     if os.path.exists(state_path) and max_steps is None:
